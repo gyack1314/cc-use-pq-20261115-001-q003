@@ -142,7 +142,8 @@ def create_app(path=None):
 
     @app.post("/editions/{identity}/decision")
     def decide(identity: str, body: DecisionRequest):
-        return ledger.review.decide(identity, body.action, body.expected_version, body.actor, body.note)
+        return ledger.review.decide(identity, body.action, body.expected_version, body.actor, body.note,
+                                    body.accepted_scope)
 
     @app.post("/editions/{identity}/publish")
     def publish(identity: str, body: PublishRequest):
@@ -181,6 +182,12 @@ def create_app(path=None):
         content = ledger.export.table(identity, table, period)
         return Response(content, media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="{identity}-{table}.csv"'})
+
+    @app.get("/editions/{identity}/adjustment.csv")
+    def adjustment_export(identity: str):
+        content = ledger.export.adjustment(identity)
+        return Response(content, media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{identity}-adjustment.csv"'})
 
     @app.get("/editions/{identity}/export.zip")
     def zip_export(identity: str):

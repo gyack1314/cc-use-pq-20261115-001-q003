@@ -82,6 +82,42 @@ def comparison_issues(comparison):
     return result
 
 
+def adjustment_issues(comparison):
+    if comparison is None or comparison.get("composition_adjustment") is None:
+        return []
+    scope = comparison["composition_adjustment"]["scope"]
+    result = []
+    exposure = scope["common_exposure"]
+    if not exposure["baseline"] or not exposure["current"]:
+        result.append(issue("no_common_exposure", "error",
+                            "两期没有可比较的共同层暴露，构成调整与分期强度比较不能成立",
+                            {"common_exposure": exposure}))
+    incomplete = scope["in_scope_incomplete"]
+    if incomplete["cells"]["baseline"] or incomplete["cells"]["current"]:
+        result.append(issue("scoped_coverage_incomplete", "error",
+                            "共同层范围内存在缺报或部分覆盖，限于共同层的比较不能发布", incomplete))
+    discarded = scope["discarded"]
+    if (discarded["layers"] or discarded["incomplete_cells"]["baseline"]
+            or discarded["incomplete_cells"]["current"]):
+        result.append(issue("comparison_scope_limited", "warning",
+                            "构成调整仅限共同层，进入/退出层与未确认单元不进入公开比较，仅列入内部核对",
+                            {"discarded_layers": len(discarded["layers"]),
+                             "incomplete_cells": discarded["incomplete_cells"],
+                             "scope_digest": scope["digest"]}))
+    return result
+
+
+def scoped_publication(comparison):
+    if comparison is None or comparison.get("composition_adjustment") is None:
+        return None
+    scope = comparison["composition_adjustment"]["scope"]
+    option = None
+    if scope["publishable"]:
+        option = {"scope": "common_layers", "digest": scope["digest"],
+                  "common_exposure": scope["common_exposure"], "discarded": scope["discarded"]}
+    return {"publishable": scope["publishable"], "blockers": scope["blockers"], "option": option}
+
+
 def summarize(issues):
     counts = Counter(item["severity"] for item in issues)
     return {"publishable": counts["error"] == 0, "errors": counts["error"],
@@ -96,8 +132,14 @@ def quality_report(periods, request, comparison):
         issues += calendar_issues(period["exposure"], request["cities"], name)
         issues += record_issues(period["orders"], period["coverage"], name)
     issues += comparison_issues(comparison)
+    issues += adjustment_issues(comparison)
     issues.append(issue("observational_sample", "info", "结果仅描述所选来源已收到的订单，不作总体或政策因果推断"))
-    return summarize(issues)
+    summary = summarize(issues)
+    scoped = scoped_publication(comparison)
+    summary["scoped_publishable"] = None if scoped is None else scoped["publishable"]
+    if scoped and scoped["option"]:
+        summary["scoped_option"] = scoped["option"]
+    return summary
 
 
 def validate_result(result):

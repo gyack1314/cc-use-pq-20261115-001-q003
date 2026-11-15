@@ -97,9 +97,22 @@ class Editions:
             periods[name] = {"window": period["window"], "exposure": period["exposure_summary"],
                              "coverage": period["coverage_summary"], "gaps": period["coverage_gaps"],
                              "totals": period["cube"]["totals"], "reconciliation": period["cube"]["reconciliation"]}
-        return {"edition_id": identity, "state": edition["state"], "stale": edition["stale"],
-                "data_revision": edition["data_revision"], "result_digest": edition["result_digest"],
-                "periods": periods, "quality": result["quality"], "semantics": result["semantics"]}
+        explanation = {"edition_id": identity, "state": edition["state"], "stale": edition["stale"],
+                       "data_revision": edition["data_revision"], "result_digest": edition["result_digest"],
+                       "periods": periods, "quality": result["quality"], "semantics": result["semantics"]}
+        comparison = result["comparison"]
+        if comparison and comparison.get("composition_adjustment"):
+            adjustment = comparison["composition_adjustment"]
+            scope = adjustment["scope"]
+            explanation["adjustment_scope"] = {
+                "kind": scope["kind"], "common_exposure": scope["common_exposure"],
+                "strata": {name: len(keys) for name, keys in scope["strata"].items()},
+                "in_scope_incomplete_cells": scope["in_scope_incomplete"]["cells"],
+                "discarded": scope["discarded"], "publishable": scope["publishable"],
+                "blockers": scope["blockers"], "digest": scope["digest"],
+                "decomposition_available": adjustment["decomposition"] is not None,
+                "note": "公开比较限于共同层；舍弃范围以摘要为准，范围外原始总量仅作内部核对"}
+        return explanation
 
     def verify(self, identity):
         edition = self.get(identity)

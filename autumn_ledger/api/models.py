@@ -65,6 +65,7 @@ class DecisionRequest(StrictModel):
     expected_version: StrictInt
     actor: StrictStr
     note: StrictStr
+    accepted_scope: StrictStr | None = None
 
 
 class PublishRequest(StrictModel):

@@ -2,6 +2,7 @@ from collections import Counter
 
 from ..errors import require
 from ..values import identifier
+from .review import release_scope
 
 
 class PublicationReadiness:
@@ -24,10 +25,14 @@ class PublicationReadiness:
         checks.append({"code": "current_data", "ok": not edition["stale"],
                        "message": "数据版本与当前账本一致" if not edition["stale"] else "数据已变化，需要新分析版本",
                        "evidence": {"edition_revision": edition["data_revision"], "current_revision": edition["current_data_revision"]}})
-        publishable = edition["result"]["quality"]["publishable"]
-        checks.append({"code": "quality", "ok": publishable,
-                       "message": "质量检查通过" if publishable else "存在阻止发布的质量问题",
-                       "evidence": {"errors": edition["result"]["quality"]["errors"]}})
+        decided = [dict(row) for row in decisions]
+        approve = next((row for row in reversed(decided) if row["action"] == "approve"), None)
+        scope = release_scope(edition["result"], approve)
+        publishable = scope is not None
+        message = {"full": "质量检查通过",
+                   "common_layers": "质量检查通过（公开比较限于共同层，舍弃范围已经审核确认）"}.get(scope, "存在阻止发布的质量问题")
+        checks.append({"code": "quality", "ok": publishable, "message": message,
+                       "evidence": {"errors": edition["result"]["quality"]["errors"], "release_scope": scope}})
         state_ok = edition["state"] in {"approved", "published"}
         checks.append({"code": "approval", "ok": state_ok,
                        "message": "分析已经审核" if state_ok else "当前状态不能发布",
@@ -36,9 +41,9 @@ class PublicationReadiness:
         checks.append({"code": "integrity", "ok": integrity, "message": "统计分区与证据一致性检查",
                        "evidence": {"checks": edition["result"]["statistical_checks"]["check_count"]}})
         return {"edition_id": identity, "can_publish": all(item["ok"] for item in checks),
-                "expected_version": edition["version"], "channel": pointer,
+                "expected_version": edition["version"], "channel": pointer, "release_scope": scope,
                 "checks": checks, "blockers": [item["code"] for item in checks if not item["ok"]],
-                "decisions": [dict(row) for row in decisions],
+                "decisions": decided,
                 "note": "此结果是查询时刻的说明；实际发布仍在同一写事务中重新检查版本与频道代数"}
 
     def queue(self):
@@ -50,7 +55,8 @@ class PublicationReadiness:
         for row in rows:
             quality = json.loads(row["result"])["quality"]
             item = {"id": row["id"], "state": row["state"], "version": row["version"],
-                    "data_revision": row["data_revision"], "quality_errors": quality["errors"]}
+                    "data_revision": row["data_revision"], "quality_errors": quality["errors"],
+                    "scoped_publishable": quality.get("scoped_publishable")}
             if row["state"] in {"rejected", "retired"}:
                 group = "closed"
             elif row["data_revision"] != current:

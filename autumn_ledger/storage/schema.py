@@ -1,8 +1,8 @@
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 STATEMENTS = (
     "CREATE TABLE IF NOT EXISTS ledger_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), schema_version INTEGER NOT NULL, revision INTEGER NOT NULL)",
-    "INSERT OR IGNORE INTO ledger_meta VALUES (1,1,0)",
+    "INSERT OR IGNORE INTO ledger_meta VALUES (1,2,0)",
     "CREATE TABLE IF NOT EXISTS audit (revision INTEGER PRIMARY KEY, action TEXT NOT NULL, identity TEXT NOT NULL, actor TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS catalog (kind TEXT NOT NULL, id TEXT NOT NULL, version INTEGER NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(kind,id,version))",
     "CREATE INDEX IF NOT EXISTS catalog_revision ON catalog(kind,id,revision)",
@@ -16,7 +16,7 @@ STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS event_snapshot ON events(revision,source,order_id)",
     "CREATE TABLE IF NOT EXISTS editions (id TEXT PRIMARY KEY, request_key TEXT NOT NULL UNIQUE, request_digest TEXT NOT NULL, name TEXT NOT NULL, data_revision INTEGER NOT NULL, request TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('draft','approved','rejected','published','retired')), version INTEGER NOT NULL, result TEXT NOT NULL, result_digest TEXT NOT NULL, created_at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS edition_revision ON editions(data_revision,state)",
-    "CREATE TABLE IF NOT EXISTS decisions (id INTEGER PRIMARY KEY AUTOINCREMENT, edition_id TEXT NOT NULL REFERENCES editions(id), edition_version INTEGER NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS decisions (id INTEGER PRIMARY KEY AUTOINCREMENT, edition_id TEXT NOT NULL REFERENCES editions(id), edition_version INTEGER NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, note TEXT NOT NULL, scope TEXT, scope_digest TEXT, created_at TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS channels (name TEXT PRIMARY KEY, edition_id TEXT NOT NULL REFERENCES editions(id), generation INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS publication_history (id INTEGER PRIMARY KEY AUTOINCREMENT, channel TEXT NOT NULL, generation INTEGER NOT NULL, edition_id TEXT NOT NULL REFERENCES editions(id), actor TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(channel,generation))",
 )

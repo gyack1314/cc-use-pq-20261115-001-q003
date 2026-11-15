@@ -2,6 +2,22 @@ from ..errors import conflict, missing, require
 from ..values import identifier, integer, text, utc_now
 
 
+def release_scope(result, approve_decision):
+    quality = result["quality"]
+    if quality["publishable"]:
+        return "full"
+    if not quality.get("scoped_publishable"):
+        return None
+    comparison = result.get("comparison") or {}
+    adjustment = comparison.get("composition_adjustment")
+    if adjustment is None or approve_decision is None:
+        return None
+    if (approve_decision.get("scope") == "common_layers"
+            and approve_decision.get("scope_digest") == adjustment["scope"]["digest"]):
+        return "common_layers"
+    return None
+
+
 class Review:
     def __init__(self, database, editions):
         self.database = database
@@ -16,19 +32,36 @@ class Review:
         require(not edition["stale"], "stale_edition", "数据已变化，请重新计算后审核发布", 409,
                 {"data_revision": edition["data_revision"], "current_revision": edition["current_data_revision"]})
 
-    def decide(self, identity, action, expected_version, actor, note):
+    def decide(self, identity, action, expected_version, actor, note, accepted_scope=None):
         identifier(identity)
         actor = text(actor, "审核人", 100)
         note = text(note, "审核说明", 1000)
         require(action in {"approve", "reject", "reopen"}, "invalid_action", "不支持的审核操作")
+        if accepted_scope is not None:
+            identifier(accepted_scope, "accepted_scope")
+        require(action == "approve" or accepted_scope is None,
+                "unexpected_scope", "仅审核通过可以确认共同层范围")
         with self.database.transaction(write=True) as connection:
             edition = self.editions.get(identity, connection)
             self.check_version(edition, expected_version)
+            scope = None
+            scope_digest = None
             if action == "approve":
                 require(edition["state"] == "draft", "invalid_transition", "仅草稿可以审核通过", 409)
                 self.check_current(edition)
-                require(edition["result"]["quality"]["publishable"], "quality_blocked", "质量检查阻止审核通过", 409,
-                        edition["result"]["quality"])
+                quality = edition["result"]["quality"]
+                if quality["publishable"]:
+                    require(accepted_scope is None, "unexpected_scope",
+                            "质量完整通过时按完整范围批准，无需确认共同层范围", 409)
+                    scope = "full"
+                elif accepted_scope is not None and quality.get("scoped_publishable"):
+                    digest = quality["scoped_option"]["digest"]
+                    require(accepted_scope == digest, "scope_mismatch",
+                            "确认的共同层范围摘要与当前分析不一致，请核对实际舍弃的范围", 409,
+                            {"expected_digest": digest})
+                    scope, scope_digest = "common_layers", digest
+                else:
+                    require(False, "quality_blocked", "质量检查阻止审核通过", 409, quality)
                 target = "approved"
             elif action == "reject":
                 require(edition["state"] in {"draft", "approved"}, "invalid_transition", "当前状态不能驳回", 409)
@@ -40,8 +73,8 @@ class Review:
             updated = connection.execute("UPDATE editions SET state=?,version=? WHERE id=? AND version=?",
                                          (target, version, identity, expected_version)).rowcount
             require(updated == 1, "review_race", "状态竞争，请重新读取", 409)
-            connection.execute("INSERT INTO decisions(edition_id,edition_version,action,actor,note,created_at) VALUES (?,?,?,?,?,?)",
-                               (identity, version, action, actor, note, utc_now()))
+            connection.execute("INSERT INTO decisions(edition_id,edition_version,action,actor,note,scope,scope_digest,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                               (identity, version, action, actor, note, scope, scope_digest, utc_now()))
             return self.editions.get(identity, connection, False)
 
     def publish(self, identity, channel, expected_version, expected_generation, actor):
@@ -58,7 +91,13 @@ class Review:
                 raise conflict("发布频道已被更新", {"current_generation": generation})
             require(edition["state"] in {"approved", "published"}, "not_approved", "分析尚未审核通过", 409)
             self.check_current(edition)
-            require(edition["result"]["quality"]["publishable"], "quality_blocked", "质量检查未通过", 409)
+            approve = connection.execute(
+                "SELECT * FROM decisions WHERE edition_id=? AND action='approve' ORDER BY id DESC LIMIT 1",
+                (identity,)).fetchone()
+            scope = release_scope(edition["result"], dict(approve) if approve else None)
+            require(scope is not None, "quality_blocked", "质量检查未通过", 409)
+            adjustment = (edition["result"].get("comparison") or {}).get("composition_adjustment")
+            scope_digest = adjustment["scope"]["digest"] if scope == "common_layers" and adjustment else None
             if current and current["edition_id"] == identity:
                 return {**dict(current), "state": edition["state"], "version": edition["version"], "replayed": True}
             generation += 1
@@ -71,8 +110,8 @@ class Review:
             connection.execute("UPDATE editions SET state='published',version=? WHERE id=?", (version, identity))
             connection.execute("INSERT INTO publication_history(channel,generation,edition_id,actor,created_at) VALUES (?,?,?,?,?)",
                                (channel, generation, identity, actor, utc_now()))
-            connection.execute("INSERT INTO decisions(edition_id,edition_version,action,actor,note,created_at) VALUES (?,?,?,?,?,?)",
-                               (identity, version, "publish", actor, channel, utc_now()))
+            connection.execute("INSERT INTO decisions(edition_id,edition_version,action,actor,note,scope,scope_digest,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                               (identity, version, "publish", actor, channel, scope, scope_digest, utc_now()))
             return {"name": channel, "edition_id": identity, "generation": generation,
                     "state": "published", "version": version, "replayed": False}
 
@@ -87,8 +126,8 @@ class Review:
             require(not channels, "edition_in_use", "分析仍被频道引用，请先发布替代版本", 409,
                     {"channels": [row["name"] for row in channels]})
             connection.execute("UPDATE editions SET state='retired',version=version+1 WHERE id=?", (identity,))
-            connection.execute("INSERT INTO decisions(edition_id,edition_version,action,actor,note,created_at) VALUES (?,?,?,?,?,?)",
-                               (identity, expected_version + 1, "retire", actor, note, utc_now()))
+            connection.execute("INSERT INTO decisions(edition_id,edition_version,action,actor,note,scope,scope_digest,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                               (identity, expected_version + 1, "retire", actor, note, None, None, utc_now()))
             return self.editions.get(identity, connection, False)
 
     def channel(self, name):

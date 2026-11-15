@@ -66,8 +66,41 @@ def summarize_comparison(comparison):
             sentence = f"已观察{label}较对比期变化{percent(change['relative_change'])}。"
         result.append(observation("period_change", sentence, {"metric": metric, **change,
                                                                "fully_comparable": comparison["fully_comparable"]}))
+    result += summarize_adjustment(comparison)
     for warning in comparison["warnings"]:
         result.append(observation("comparison_limit", warning, {}))
+    return result
+
+
+def summarize_adjustment(comparison):
+    adjustment = comparison.get("composition_adjustment")
+    if adjustment is None:
+        return []
+    result = []
+    scope = adjustment["scope"]
+    if adjustment["decomposition"]:
+        for metric, label in (("orders", "有效订单"), ("net_cents", "净收入")):
+            content = adjustment["decomposition"][metric]
+            components = content["components"]
+            sentence = (f"共同层{label}每单位暴露强度原始变化{content['raw_change']:.6g}，"
+                        f"冻结基期暴露权重后：层内变化{components['within_layer']:.6g}、"
+                        f"构成变化{components['composition']:.6g}、交互部分{components['interaction']:.6g}。")
+            result.append(observation("composition_adjustment", sentence,
+                                      {"metric": metric, "intensity": content["intensity"],
+                                       "components": components}))
+    else:
+        result.append(observation("composition_adjustment_unavailable",
+                                  "两期没有共同暴露的分层，构成调整分解不能成立；无暴露的层不视为零强度。",
+                                  {"common_exposure": scope["common_exposure"]}))
+    discarded = scope["discarded"]
+    if (discarded["layers"] or discarded["incomplete_cells"]["baseline"]
+            or discarded["incomplete_cells"]["current"]):
+        result.append(observation("composition_scope",
+                                  f"构成调整仅限共同层；{len(discarded['layers'])}个进入/退出/未观察层"
+                                  "与未确认单元仅列入内部核对，不进入公开比较。",
+                                  {"discarded_layers": len(discarded["layers"]),
+                                   "incomplete_cells": discarded["incomplete_cells"],
+                                   "scope_digest": scope["digest"]}))
     return result
 
 

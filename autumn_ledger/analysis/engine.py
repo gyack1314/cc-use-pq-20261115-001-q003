@@ -1,5 +1,6 @@
 from ..errors import require
 from ..values import fingerprint, utc_now
+from .adjustment import composition_adjustment
 from .comparison import comparable_coverage, compare_periods
 from .cubes import build_cubes
 from .quality import quality_report, validate_result
@@ -59,6 +60,8 @@ class AnalysisEngine:
                                         request["sources"], request["cities"])
             comparison = compare_periods(periods["current"]["cube"], periods["baseline"]["cube"],
                                          windows["current"], windows["baseline"], pairs)
+            comparison["composition_adjustment"] = composition_adjustment(periods["current"],
+                                                                          periods["baseline"], request)
         quality = quality_report(periods, request, comparison)
         result = {"format_version": 1, "data_revision": revision, "request": request,
                   "references": references, "periods": periods, "comparison": comparison,
@@ -93,6 +96,8 @@ class AnalysisEngine:
                 "refund": "refund_cents为订单累计退款，不是本次退款增量",
                 "coverage": "complete表示来源确认该城市日期数据已齐，未登记不能当零",
                 "denominator": "日均按选定城市日期暴露计，不按有订单的日期计",
+                "composition_adjustment": "构成调整以已确认完整的来源城市日期为暴露，按来源×城市×工作日/周末分层，"
+                                          "共同层内冻结基期暴露权重分解层内/构成/交互变化；缺报不记零",
                 "scope": "仅描述所选来源订单，不推断总体或因果效应"}
 
     def preview(self, value):

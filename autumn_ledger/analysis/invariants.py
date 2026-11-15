@@ -1,5 +1,6 @@
 from math import isfinite
 
+from .adjustment import close
 from .cubes import MEASURES
 
 
@@ -82,6 +83,47 @@ def check_lineage(result):
             check("lineage_heads", sorted(expected) == sorted(actual), len(expected), len(actual))]
 
 
+def check_adjustment(comparison):
+    if not comparison or comparison.get("composition_adjustment") is None:
+        return []
+    adjustment = comparison["composition_adjustment"]
+    layers = adjustment["layers"]
+    scope = adjustment["scope"]
+    result = []
+    for name in ("baseline", "current"):
+        actual = sum(layer["periods"][name]["exposure"] for layer in layers if layer["class"] == "common")
+        result.append(check(f"adjustment:common_exposure:{name}", actual == scope["common_exposure"][name],
+                            scope["common_exposure"][name], actual))
+    decomposition = adjustment["decomposition"]
+    if decomposition is not None:
+        for metric, content in decomposition.items():
+            prefix = f"adjustment:{metric}"
+            components = content["components"]
+            combined = components["within_layer"] + components["composition"] + components["interaction"]
+            result.append(check(prefix + ":identity", close(combined, content["raw_change"]),
+                                content["raw_change"], combined))
+            frozen = content["intensity"]["current_at_baseline_weights"] - content["intensity"]["baseline"]
+            result.append(check(prefix + ":frozen_weights", close(frozen, components["within_layer"]),
+                                components["within_layer"], frozen))
+            for component in ("within_layer", "composition", "interaction"):
+                actual = sum(row[component] for row in content["layers"])
+                result.append(check(prefix + ":layers:" + component, close(actual, components[component]),
+                                    components[component], actual))
+            for name, key in (("baseline", "weight_baseline"), ("current", "weight_current")):
+                actual = sum(row[key] for row in content["layers"])
+                result.append(check(prefix + ":weights:" + name, close(actual, 1.0), 1.0, actual))
+            result.append(check(prefix + ":reconciliation", content["reconciliation"]["ok"]))
+    for name in ("baseline", "current"):
+        reconciliation = adjustment["internal_reconciliation"][name]
+        for metric in ("orders", "net_cents"):
+            actual = (reconciliation["in_scope_common_layers"][metric]
+                      + reconciliation["out_of_scope_layers"][metric]
+                      + reconciliation["excluded_incomplete_coverage"][metric])
+            expected = reconciliation["raw_totals"][metric]
+            result.append(check(f"adjustment:reconcile:{name}:{metric}", actual == expected, expected, actual))
+    return result
+
+
 def check_finite(value, path="result"):
     failures = []
     if isinstance(value, float) and not isfinite(value):
@@ -101,6 +143,7 @@ def inspect_result(result):
         period_checks = check_totals(period["cube"]) + check_distributions(period["cube"])
         period_checks += check_daily(period) + check_coverage(period)
         checks += [{**item, "period": name} for item in period_checks]
+    checks += check_adjustment(result["comparison"])
     nonfinite = check_finite(result)
     checks.append(check("finite_numbers", not nonfinite, [], nonfinite))
     failed = [item for item in checks if not item["ok"]]

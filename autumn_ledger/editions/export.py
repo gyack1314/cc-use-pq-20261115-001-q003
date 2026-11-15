@@ -74,6 +74,50 @@ class Export:
         rows = edition["result"]["periods"][period]["coverage"]
         return encode_csv(["source", "city", "day", "status", "version", "revision", "note"], rows)
 
+    def adjustment(self, identity, published_only=False):
+        edition = self.edition(identity, published_only)
+        comparison = edition["result"]["comparison"]
+        require(comparison and comparison.get("composition_adjustment"),
+                "no_adjustment", "分析没有构成调整结果")
+        adjustment = comparison["composition_adjustment"]
+        contributions = {}
+        for metric, content in (adjustment["decomposition"] or {}).items():
+            for row in content["layers"]:
+                contributions[(row["source"], row["city"], row["day_type"], metric)] = row
+        headers = ["edition_id", "data_revision", "source", "city", "day_type", "layer_class"]
+        for name in ("baseline", "current"):
+            headers += [f"{name}_expected_dates", f"{name}_exposure", f"{name}_partial_dates",
+                        f"{name}_missing_dates", f"{name}_orders", f"{name}_net_cents",
+                        f"{name}_orders_per_exposure", f"{name}_net_cents_per_exposure"]
+        headers += ["weight_baseline", "weight_current",
+                    "within_layer_orders", "composition_orders", "interaction_orders",
+                    "within_layer_net_cents", "composition_net_cents", "interaction_net_cents"]
+        rows = []
+        for layer in adjustment["layers"]:
+            row = {"edition_id": identity, "data_revision": edition["data_revision"],
+                   "source": layer["source"], "city": layer["city"], "day_type": layer["day_type"],
+                   "layer_class": layer["class"]}
+            for name in ("baseline", "current"):
+                cell = layer["periods"][name]
+                row[f"{name}_expected_dates"] = cell["expected_dates"]
+                row[f"{name}_exposure"] = cell["exposure"]
+                row[f"{name}_partial_dates"] = cell["partial_dates"]
+                row[f"{name}_missing_dates"] = cell["missing_dates"]
+                row[f"{name}_orders"] = cell["orders"]
+                row[f"{name}_net_cents"] = cell["net_cents"]
+                row[f"{name}_orders_per_exposure"] = cell["orders_per_exposure"]
+                row[f"{name}_net_cents_per_exposure"] = cell["net_cents_per_exposure"]
+            key = (layer["source"], layer["city"], layer["day_type"])
+            weights = contributions.get((*key, "orders"))
+            row["weight_baseline"] = weights["weight_baseline"] if weights else None
+            row["weight_current"] = weights["weight_current"] if weights else None
+            for metric in ("orders", "net_cents"):
+                contribution = contributions.get((*key, metric))
+                for component in ("within_layer", "composition", "interaction"):
+                    row[f"{component}_{metric}"] = contribution[component] if contribution else None
+            rows.append(row)
+        return encode_csv(headers, rows)
+
     def lineage(self, identity):
         edition = self.edition(identity)
         return encode_csv(["period", "source", "order_id", "event_id", "sequence", "revision", "digest"],
@@ -88,6 +132,8 @@ class Export:
             for table in TABLE_DIMENSIONS:
                 files[f"{period}/{table}.csv"] = self.table(identity, table, period, published_only).encode("utf-8")
             files[f"{period}/coverage.csv"] = self.coverage(identity, period).encode("utf-8")
+        if result["comparison"] and result["comparison"].get("composition_adjustment"):
+            files["comparison/adjustment.csv"] = self.adjustment(identity, published_only).encode("utf-8")
         manifest = {"format": "autumn-ledger-bundle-v1", "edition_id": identity,
                     "result_digest": document["result_digest"],
                     "files": {name: {"bytes": len(content), "sha256": self.bytes_digest(content)}
